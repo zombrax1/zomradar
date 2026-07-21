@@ -1,0 +1,9 @@
+# Publish only the application source. Captures and runtime data may contain credentials.
+*
+!.gitignore
+!README.md
+!outputs/
+outputs/*
+!outputs/*.py
+!outputs/*.html
+!outputs/requirements.txt

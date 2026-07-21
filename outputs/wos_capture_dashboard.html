@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>WOS Capture Inspector</title>
+  <style>
+    :root{color-scheme:dark;--bg:#061426;--panel:#0a2139;--panel2:#0d2946;--line:#1d4365;--text:#eef7ff;--muted:#91acc5;--cyan:#49c8ff;--amber:#ffbd38;--green:#58d68d;--r:14px}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 Inter,Segoe UI,Arial,sans-serif}button,input{font:inherit}.wrap{max-width:1440px;margin:auto;padding:24px}.top{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;margin-bottom:18px}.top h1{margin:0 0 4px;font-size:30px;letter-spacing:-.5px}.muted{color:var(--muted)}.status{border:1px solid #765b18;color:var(--amber);background:#251d08;padding:8px 12px;border-radius:9px;font-weight:700;white-space:nowrap}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}.stat,.panel{background:linear-gradient(135deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:var(--r)}.stat{padding:16px}.stat small{display:block;color:var(--muted);margin-bottom:5px}.stat strong{font-size:18px}.grid{display:grid;grid-template-columns:minmax(310px,.72fr) minmax(520px,1.28fr);gap:12px}.panel{padding:18px}.panel h2{margin:0 0 16px;color:var(--cyan);font-size:18px}.alliance h3{font-size:25px;margin:0 0 16px}.facts{display:grid;grid-template-columns:145px 1fr;margin:0}.facts dt,.facts dd{padding:8px 0;border-bottom:1px solid #173955}.facts dt{color:var(--muted)}.facts dd{margin:0;font-weight:650}.note{margin-top:16px;padding:12px;border-left:3px solid var(--amber);background:#171d23;color:#d5dde5}.tools{display:flex;gap:8px;align-items:center;margin-bottom:12px}.tools input{width:100%;min-width:0;background:#061a2e;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:10px 12px;outline:none}.tools input:focus{border-color:var(--cyan)}.roles{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}.roles button,.copy{border:1px solid var(--line);background:#0a1d32;color:var(--muted);padding:7px 10px;border-radius:8px;cursor:pointer}.roles button.active{background:#103e5d;color:#fff;border-color:#2775a1}.table-wrap{max-height:790px;overflow:auto;border:1px solid #173955;border-radius:10px}table{width:100%;border-collapse:collapse}th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #173955}th{position:sticky;top:0;background:#0a2037;color:var(--muted);z-index:1}td:nth-child(3),th:nth-child(3){text-align:right}.role{color:var(--cyan);font-weight:800}.count{color:var(--muted);font-size:13px;margin-top:10px}.map{margin-top:12px}.coords{display:flex;gap:10px;flex-wrap:wrap}.coord{flex:1;min-width:105px;padding:12px;background:#071b30;border:1px solid #173955;border-radius:10px}.coord small{display:block;color:var(--muted)}.coord strong{font-size:22px}.raw{margin-top:12px}.raw summary{cursor:pointer;color:var(--cyan);font-size:18px;font-weight:700}.raw-bar{display:flex;justify-content:flex-end;margin:12px 0 8px}pre{max-height:420px;overflow:auto;margin:0;background:#04101e;border:1px solid #173955;border-radius:10px;padding:14px;color:#a9e5b9;font:12px/1.55 Consolas,monospace}.source{display:inline-block;font-size:12px;color:var(--green);margin-left:6px}.hidden{display:none}@media(max-width:900px){.stats{grid-template-columns:1fr 1fr}.grid{grid-template-columns:1fr}.wrap{padding:14px}.top{display:block}.status{display:inline-block;margin-top:10px}}@media(max-width:520px){.stats{grid-template-columns:1fr}.top h1{font-size:25px}.facts{grid-template-columns:120px 1fr}th,td{padding:9px 8px}}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header class="top">
+      <div><h1>WOS Capture Inspector</h1><div class="muted">Captured from MuMu Player 1715 · 14 July 2026</div></div>
+      <div class="status">Snapshot — not live/searchable</div>
+    </header>
+
+    <section class="stats">
+      <div class="stat"><small>Player</small><strong>Katak</strong><span class="source">protocol</span></div>
+      <div class="stat"><small>Alliance</small><strong>[WTH] WhoTheHell</strong></div>
+      <div class="stat"><small>Captured roster</small><strong>96 / 100 members</strong></div>
+      <div class="stat"><small>Map record</small><strong>State 1642 · X 653 · Y 460</strong></div>
+    </section>
+
+    <section class="grid">
+      <div>
+        <article class="panel alliance">
+          <h2>Alliance overview</h2>
+          <h3>[WTH] WhoTheHell</h3>
+          <dl class="facts">
+            <dt>Leader</dt><dd>Ravenna</dd>
+            <dt>Power</dt><dd>33,851,565,402 <span class="source">protocol/UI</span></dd>
+            <dt>Kingdom rank</dt><dd>2</dd>
+            <dt>Members</dt><dd>96 / 100</dd>
+            <dt>Language</dt><dd>All languages</dd>
+            <dt>Source</dt><dd>MuMu network capture + screen verification</dd>
+          </dl>
+          <div class="note">This page shows only data captured during the test. It cannot search another alliance or a new coordinate.</div>
+        </article>
+
+        <article class="panel map">
+          <h2>Captured player &amp; map record</h2>
+          <dl class="facts">
+            <dt>Chief</dt><dd>Katak</dd>
+            <dt>Chief ID</dt><dd>245773508</dd>
+            <dt>Power</dt><dd>288,956,327 <span class="source">exact protocol value</span></dd>
+            <dt>Alliance</dt><dd>[WTH] WhoTheHell · R3</dd>
+          </dl>
+          <div class="coords">
+            <div class="coord"><small>State</small><strong>1642</strong></div>
+            <div class="coord"><small>X</small><strong>653</strong></div>
+            <div class="coord"><small>Y</small><strong>460</strong></div>
+          </div>
+        </article>
+      </div>
+
+      <article class="panel">
+        <h2>Captured alliance roster</h2>
+        <div class="tools"><input id="search" type="search" placeholder="Filter the captured names…" aria-label="Filter captured member names"></div>
+        <div class="roles" id="roles"></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Role</th><th>Name</th><th>Power shown</th></tr></thead>
+            <tbody id="members"></tbody>
+          </table>
+        </div>
+        <div class="count" id="count"></div>
+      </article>
+    </section>
+
+    <details class="panel raw">
+      <summary>Raw JSON</summary>
+      <div class="raw-bar"><button class="copy" id="copy">Copy JSON</button></div>
+      <pre id="json"></pre>
+    </details>
+  </main>
+
+  <script>
+    const snapshot={capture:{source:"MuMu Player 1715",captured_on:"2026-07-14",live:false,method:"TCP packet capture plus visual verification",limits:"Only records opened during this test"},player:{id:245773508,name:"Katak",power:288956327,alliance:"WTH",role:"R3",state:1642,coordinates:{x:653,y:460}},alliance:{abbreviation:"WTH",name:"WhoTheHell",leader:"Ravenna",power:33851565402,rank:2,members:{current:96,maximum:100},language:"All languages"},members:[]};
+    const groups={
+      R5:[["Ravenna","503.9M"]],
+      R4:[["ofek","683.7M"],["†TravelleR†","609.8M"],["Miss Queen","550.2M"],["Sanjinaaa","489.9M"],["KATANA138_CHI","427M"],["Hylia","315.5M"],["kefo","65.9M"]],
+      R3:[["Stitch","838.3M"],["Yondaime","755.7M"],["Leon_WOS","694.8M"],["patti3","691.4M"],["Titan Slayer","680.4M"],["Meatball","658M"],["Crazyk","621.5M"],["dinusalvatore","589M"],["SaKr","564.2M"],["Wariaklar","561.7M"],["FANTASMA","560M"],["Novichok","547M"],["Oil","539.7M"],["Samer XFarmX","537.6M"],["Mahmoud","523.5M"],["Mariyam","504.1M"],["Natali 100","501.8M"],["lemmy 4","495.3M"],["Alita","475.4M"],["RySn512","446.1M"],["marsclyn","441.2M"],["Oceane","432.4M"],["Milla","389.6M"],["Geovanna","301.5M"],["Katak","288.9M"],["swagla","286.2M"],["shadorave","264.5M"],["eli07","247.1M"]],
+      R2:[["Jo Olive","473.4M"],["Kolumbijska","687.9M"],["Eliklet","655.4M"],["MAGNUS","588.7M"],["Oscarin","568M"],["Vani","522.1M"],["RASHoTR","509M"],["maurion","487.1M"],["ДІД 77","467M"],["Stemi","439.7M"],["musti","367.3M"],["lordgarcia","366M"],["miś","349.7M"],["pattiwahn","344.2M"],["HMG13","331.5M"],["Chilling Ice","318.6M"],["Ich","290.6M"],["Jurrie","264.2M"],["Ava ♡","263.1M"],["Nemo80130","257.2M"],["Little Wind","249.2M"],["Oleksanbr1990","223.2M"],["Hope","145.7M"],["Develion","123.7M"]],
+      R1:[["Trye","654.8M"],["SaSKi","170.9M"],["自己吓自己","106.9M"],["K!tK@t","77.9M"],["Badboy2","639.2M"],["King Ed","637.1M"],["Rich","416.3M"],["BaLaBeLe","315.1M"],["Mah_Piramo","220.4M"],["Radwen","215.7M"],["Alaya","213.4M"],["4EverCutie","205.5M"],["Frodo","187.6M"],["MrDiego15","157.2M"],["태양의 킬러","152.4M"],["Filtiarn","150.8M"],["Amberbelliss123","149.9M"],["Black Tiger","147.7M"],["Purpleherbal","145.9M"],["Lady Larissa","140.4M"],["Igor87","134.8M"],["Dex","133.9M"],["Chief Tom","119.8M"],["mcnuggets","116.5M"],["Small Triffid","111.3M"],["Yorkie Pud","106.7M"],["Queen 7hd","101.7M"],["xpiano","89.8M"],["13 ДІД","85.8M"],["M7md","83.6M"],["Kei","79.3M"],["Elvin","72.9M"],["ShubNiggurath","59.8M"],["Katana","56.3M"],["LISSA","12.6M"],["minikappa","989,060"]]
+    };
+    Object.entries(groups).forEach(([role,rows])=>rows.forEach(([name,power])=>snapshot.members.push({role,name,power_display:power,power_precision:"rounded as shown in MuMu"})));
+    const body=document.querySelector('#members'),count=document.querySelector('#count'),search=document.querySelector('#search'),roles=document.querySelector('#roles');let role='All';
+    ['All',...Object.keys(groups)].forEach(name=>{const b=document.createElement('button');b.textContent=`${name} ${name==='All'?snapshot.members.length:groups[name].length}`;b.className=name==='All'?'active':'';b.onclick=()=>{role=name;[...roles.children].forEach(x=>x.classList.toggle('active',x===b));render()};roles.appendChild(b)});
+    function render(){const q=search.value.trim().toLocaleLowerCase();const rows=snapshot.members.filter(x=>(role==='All'||x.role===role)&&x.name.toLocaleLowerCase().includes(q));body.innerHTML=rows.map(x=>`<tr><td class="role">${x.role}</td><td>${escapeHtml(x.name)}</td><td>${escapeHtml(x.power_display)}</td></tr>`).join('');count.textContent=`Showing ${rows.length} of ${snapshot.members.length} captured members`}
+    function escapeHtml(s){return s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+    search.addEventListener('input',render);document.querySelector('#json').textContent=JSON.stringify(snapshot,null,2);document.querySelector('#copy').onclick=async()=>{await navigator.clipboard.writeText(JSON.stringify(snapshot,null,2));document.querySelector('#copy').textContent='Copied';setTimeout(()=>document.querySelector('#copy').textContent='Copy JSON',1200)};render();
+  </script>
+</body>
+</html>
