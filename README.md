@@ -1,20 +1,31 @@
-# WOS local dashboard
+# ZomRadar
 
-Local Python API and browser dashboard for inspecting user-supplied game captures.
+A complete, token-free web demo for alliance and player exploration. It includes
+the dashboard, account system, package activation flow, synthetic demo data,
+SQLite persistence, and a production-ready Docker entrypoint.
 
-## Run
+## Run locally
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\pip install -r outputs\requirements.txt
-python outputs\wos_private_api.py
+python app.py
 ```
 
-Database credentials are read from `WOS_MYSQL_HOST`, `WOS_MYSQL_PORT`,
-`WOS_MYSQL_USER`, `WOS_MYSQL_PASSWORD`, and `WOS_MYSQL_DATABASE`.
+Open <http://localhost:8000>, create the first account, choose a demo package,
+then load saved state `1755`.
 
-## Security
+## Run with Docker
 
-Never commit packet captures, databases, logs, browser traces, environment files,
-or generated state. Captures can contain reusable session credentials. The
-repository allow-list in `.gitignore` excludes those artifacts by default.
+```powershell
+docker build -t zomradar .
+docker run --rm -p 8000:8000 -v zomradar-data:/app/data zomradar
+```
+
+Set `ZOMRADAR_DATA_DIR` to change the SQLite directory and
+`ZOMRADAR_SECURE_COOKIES=1` behind HTTPS.
+
+## Live data boundary
+
+This public repository contains no packet captures, session credentials, or
+private account data. Live scanning and game controls require a separate,
+self-owned private collector. The included web app remains fully runnable using
+synthetic demo data.

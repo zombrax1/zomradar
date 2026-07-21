@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""Token-free ZomRadar web server with safe demo data."""
+
+import json
+import os
+from http.cookies import SimpleCookie
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+from outputs.wos_saas import SESSION_SECONDS, SaaSStore
+
+
+ROOT = Path(__file__).parent
+DATA_DIR = Path(os.getenv("ZOMRADAR_DATA_DIR", ROOT / "data"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+STORE = SaaSStore(DATA_DIR / "zomradar.db")
+STORE.initialize()
+
+ALLIANCES = [
+    {"id": 1755000001, "state": 1755, "tag": "NTH", "name": "Northwatch", "member_count": 12, "capacity": 100, "leader_name": "Aurora", "exact_power": 32611024561, "announcement": "Demo alliance data", "description": "Synthetic data included for a safe public demo."},
+    {"id": 1755000002, "state": 1755, "tag": "SOL", "name": "Solaris", "member_count": 8, "capacity": 100, "leader_name": "Nova", "exact_power": 24890211804, "announcement": "Welcome to Solaris", "description": "Demo alliance for UI testing."},
+    {"id": 1755000003, "state": 1755, "tag": "FRS", "name": "Frostline", "member_count": 6, "capacity": 80, "leader_name": "Glacier", "exact_power": 11987654320, "announcement": "Stay warm", "description": "No live game data is used."},
+]
+
+NAMES = ("Aurora", "Beacon", "Cinder", "Drift", "Ember", "Flint", "Gale", "Harbor", "Ion", "Jade", "Kite", "Lumen")
+PLAYERS = [
+    {"rid": 90000000 + index, "player_id": 700000000 + index, "name": name, "state": 1755,
+     "alliance_id": ALLIANCES[0]["id"], "alliance_tag": "NTH", "alliance_name": "Northwatch",
+     "rank": 5 if index == 1 else 4 if index < 4 else 3, "power": 720000000 - index * 27000000,
+     "power_change": index * 125000, "online": index % 3 == 0, "vip": 10 - index % 7,
+     "x": 500 + index * 3, "y": 620 - index * 2, "coordinate_state": 1755,
+     "level": 30 - index % 4, "language": "English", "shielded": index % 4 == 0,
+     "chat_messages": []}
+    for index, name in enumerate(NAMES, 1)
+]
+
+
+def public_user(user):
+    return user
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "ZomRadar/1.0"
+
+    def send_json(self, status, payload, headers=None):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def current_user(self):
+        cookie = SimpleCookie(self.headers.get("Cookie", ""))
+        token = cookie["wos_session"].value if "wos_session" in cookie else None
+        return STORE.session_user(token)
+
+    def session_cookie(self, token, age=SESSION_SECONDS):
+        secure = os.getenv("ZOMRADAR_SECURE_COOKIES") == "1" or self.headers.get("X-Forwarded-Proto") == "https"
+        return f"wos_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={age}{'; Secure' if secure else ''}"
+
+    def read_json(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        if self.headers.get_content_type() != "application/json" or not 0 < length <= 8192:
+            raise ValueError("invalid JSON request")
+        return json.loads(self.rfile.read(length))
+
+    def require_user(self):
+        user = self.current_user()
+        if not user:
+            self.send_json(401, {"error": "sign in required"})
+        return user
+
+    def do_POST(self):
+        path = urlparse(self.path).path
+        origin, host = self.headers.get("Origin"), self.headers.get("Host")
+        if origin and origin not in {f"http://{host}", f"https://{host}"}:
+            self.send_json(403, {"error": "request must come from this dashboard"})
+            return
+        if path in {"/api/auth/register", "/api/auth/login"}:
+            try:
+                data = self.read_json()
+                user = STORE.register(data.get("email"), data.get("password"), data.get("display_name")) if path.endswith("register") else STORE.authenticate(data.get("email"), data.get("password"))
+                self.send_json(200, {"user": public_user(user)}, {"Set-Cookie": self.session_cookie(STORE.create_session(user["id"]))})
+            except (json.JSONDecodeError, TypeError, ValueError) as error:
+                self.send_json(400, {"error": str(error)})
+            return
+        user = self.require_user()
+        if not user:
+            return
+        try:
+            if path == "/api/auth/logout":
+                cookie = SimpleCookie(self.headers.get("Cookie", ""))
+                STORE.logout(cookie["wos_session"].value if "wos_session" in cookie else None)
+                self.send_json(200, {"signed_out": True}, {"Set-Cookie": self.session_cookie("", 0)})
+            elif path == "/api/billing/test-checkout":
+                data = self.read_json()
+                self.send_json(200, {"test_mode": True, "user": STORE.activate(user["id"], data.get("plan"), "demo")})
+            elif path == "/api/admin/activate" and user["role"] == "admin":
+                data = self.read_json()
+                activated = STORE.activate(int(data.get("user_id")), data.get("plan"), "admin", int(data.get("days", 30)))
+                self.send_json(200, {"user": activated})
+            elif path in {"/add-bot", "/start-gather", "/recall-gather", "/auto-shield", "/gather-automation"}:
+                self.send_json(503, {"error": "live controls require a private collector; no credentials are stored in this web demo"})
+            else:
+                self.send_json(403 if path == "/api/admin/activate" else 404, {"error": "administrator access required" if path == "/api/admin/activate" else "not found"})
+        except (json.JSONDecodeError, TypeError, ValueError) as error:
+            self.send_json(400, {"error": str(error)})
+
+    def do_GET(self):
+        request = urlparse(self.path)
+        path, query = request.path, parse_qs(request.query)
+        if path in {"/", "/dashboard", "/wos_search_dashboard.html"}:
+            body = (ROOT / "outputs" / "wos_search_dashboard.html").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path == "/favicon.ico":
+            self.send_response(204)
+            self.end_headers()
+            return
+        if path == "/health":
+            self.send_json(200, {"ok": True, "mode": "demo", "credentials_stored": False})
+            return
+        if path == "/api/plans":
+            self.send_json(200, {"test_mode": True, "currency": "USD", "results": STORE.plans()})
+            return
+        user = self.require_user()
+        if not user:
+            return
+        if path == "/api/session":
+            self.send_json(200, {"user": public_user(user)})
+        elif path == "/api/admin/users":
+            try:
+                self.send_json(200, {"results": STORE.admin_users(user["id"])})
+            except PermissionError as error:
+                self.send_json(403, {"error": str(error)})
+        elif path in {"/bots", "/gather-bots", "/gathers", "/scout-reports", "/live-attacks"}:
+            self.send_json(200, {"demo": True, "results": []})
+        elif path == "/state-cache":
+            state = query.get("state", [""])[0]
+            if not state.isdigit() or not 1492 <= int(state) <= 1894:
+                self.send_json(400, {"error": "state must be a number from 1492 to 1894"})
+                return
+            rows = ALLIANCES if state == "1755" else []
+            self.send_json(200, {"cached": bool(rows), "storage": "demo", "state": int(state), "complete": True, "results": rows})
+        elif path in {"/alliances", "/players", "/profiles"}:
+            self.send_json(200, {"demo": True, "results": ALLIANCES if path == "/alliances" else PLAYERS})
+        elif path == "/alliance-details":
+            alliance = next((row for row in ALLIANCES if str(row["id"]) == query.get("id", [""])[0]), None)
+            self.send_json(200 if alliance else 404, {"stored": True, "alliance": alliance} if alliance else {"error": "alliance not found"})
+        elif path == "/roster":
+            alliance_id = query.get("id", [""])[0]
+            members = PLAYERS if alliance_id == str(ALLIANCES[0]["id"]) else []
+            self.send_json(200, {"stored": True, "alliance_id": int(alliance_id) if alliance_id.isdigit() else None, "members": members, "coordinates_available": bool(members)})
+        elif path == "/details-2":
+            value = query.get("rid", [""])[0]
+            if not value.isdigit():
+                self.send_json(400, {"error": "rid must contain digits only"})
+                return
+            rid = int(value)
+            player = next((row for row in PLAYERS if row["rid"] == rid), None)
+            self.send_json(200, {"stored": True, "rid": rid, "power": {"position": PLAYERS.index(player) + 1, "value": player["power"], "alliance_rank": player["rank"]}, "ko": None, "daily_contribution": None, "restricted_reason": "Demo data"} if player else {"error": "player not found"})
+        elif path.startswith("/live-") or path in {"/gather-automation", "/auto-shield"}:
+            self.send_json(503, {"error": "live data requires a private collector; this public deployment is token-free"})
+        else:
+            self.send_json(404, {"error": "not found"})
+
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", "8000"))
+    print(f"ZomRadar: http://127.0.0.1:{port}")
+    ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()

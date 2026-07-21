@@ -2,6 +2,8 @@
 *
 !.gitignore
 !README.md
+!Dockerfile
+!app.py
 !outputs/
 outputs/*
 !outputs/*.py
