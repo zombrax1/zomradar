@@ -13,6 +13,13 @@ python app.py
 Open <http://localhost:8000>, create an account, upload your own PCAP in
 Settings, then use **Live fetch**.
 
+Custom player photos are served from the running game's local BestHTTP cache.
+The server automatically detects a connected MuMu ADB device. If ADB is in a
+custom location, set `ZOMRADAR_ADB` and optionally `ZOMRADAR_ADB_SERIAL` before
+starting the server. `ZOMRADAR_AVATAR_CACHE_DIR` can instead point to a copied
+`LocalCache/Content` directory. Missing photos keep the normal fallback avatar
+until the game has cached them.
+
 ## Run with Docker
 
 ```powershell

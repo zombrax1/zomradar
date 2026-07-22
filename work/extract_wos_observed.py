@@ -66,7 +66,7 @@ def profile(record):
         **({"vip": number(record[7])} if 7 in record else {}),
         **({"language": text(record[8])} if 8 in record else {}),
         **({"level": number(record[11])} if 11 in record else {}),
-        **({"avatar_path": avatar_path, "avatar_url": "https://gof-formal-avatar.akamaized.net/" + avatar_path.lstrip("/")} if avatar_path else {}),
+        **({"avatar_path": avatar_path} if avatar_path else {}),
         "profile_field_tags": sorted(record),
         "alliance_id": number(alliance[0]),
         "alliance_tag": text(alliance[1]),

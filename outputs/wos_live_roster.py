@@ -1581,8 +1581,8 @@ def self_test():
     add_presence(presence)
     assert presence == [{"last_active_at": 123, "online": False}, {"last_active_at": 0, "online": True}]
     details = profile({**player, 8: b"en", 11: 80, 12: b"avatar.png"})
-    assert (details["language"], details["level"], details["avatar_url"]) == (
-        "en", 80, "https://gof-formal-avatar.akamaized.net/avatar.png"
+    assert (details["language"], details["level"], details["avatar_path"]) == (
+        "en", 80, "avatar.png"
     )
     assert (struct.pack("<HHHI", 2, 0, 4, 5) + b"\x04\x01\0\0\0").hex() == "020000000400050000000401000000"
     assert endpoint(GAME_HANDSHAKE)[1] == 30101

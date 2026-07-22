@@ -1,7 +1,11 @@
 from pathlib import Path
+from email.utils import format_datetime
+from datetime import datetime, timezone
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import app
+from outputs.wos_avatar_cache import AvatarCache, avatar_epoch
 
 
 def test_user_live_session_reuses_private_capture():
@@ -41,6 +45,27 @@ def test_roster_and_details_render_player_profile_pictures():
     assert "playerAvatar(player,true)" in dashboard
 
 
+def test_avatar_cache_matches_protocol_timestamp_without_player_hardcoding(tmp_path):
+    epoch = 1741285985
+    entry = tmp_path / "any-cache-key"
+    entry.mkdir()
+    modified = format_datetime(datetime.fromtimestamp(epoch + 1, timezone.utc), usegmt=True)
+    (entry / "headers.cache").write_bytes(f"Last-Modified:{modified}\n".encode("ascii"))
+    image = b"\x89PNG\r\n\x1a\nplayer-photo"
+    (entry / "content.cache").write_bytes(image)
+
+    cache = AvatarCache(local_root=tmp_path, adb="missing-adb")
+    assert cache.resolve(f"2025/03/06/rqOPrW_{epoch}.png") == image
+    assert cache.resolve("../../private.png") is None
+    assert avatar_epoch(f"2025/03/06/rqOPrW_{epoch}.png") == epoch
+
+
+def test_player_avatar_url_is_same_origin_and_path_based():
+    player = app.with_local_avatar({"rid": 7, "avatar_path": "2025/03/06/rqOPrW_1741285985.png"})
+    assert player["avatar_url"].startswith("/avatar?path=")
+    assert "gof-formal-avatar" not in player["avatar_url"]
+
+
 def test_alliance_search_chooses_a_game_bot_automatically():
     dashboard = Path(__file__).with_name("outputs").joinpath("wos_search_dashboard.html").read_text(encoding="utf-8")
     assert "stateBot" not in dashboard
@@ -60,5 +85,8 @@ if __name__ == "__main__":
     test_bot_ids_are_scoped_to_the_signed_in_user()
     test_primary_actions_do_not_open_confirmations()
     test_roster_and_details_render_player_profile_pictures()
+    with TemporaryDirectory() as directory:
+        test_avatar_cache_matches_protocol_timestamp_without_player_hardcoding(Path(directory))
+    test_player_avatar_url_is_same_origin_and_path_based()
     test_alliance_search_chooses_a_game_bot_automatically()
     test_no_sample_mode_remains()

@@ -8,10 +8,11 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock, Thread
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from outputs.wos_saas import SESSION_SECONDS, SaaSStore
 from outputs.wos_gather_scheduler import GatherScheduler
+from outputs.wos_avatar_cache import AvatarCache
 
 os.environ["WOS_DISABLE_DEFAULT_CAPTURES"] = "1"
 from outputs.wos_live_roster import WosSession, bot_name_from_capture, endpoint, fpnn_alliance_id, fpnn_auth_frame, login_frame, msgpack_value
@@ -26,6 +27,7 @@ ALL_FEATURES = ["alliance_search", "state_search", "gather", "auto_shield"]
 LIVE_SESSIONS = {}
 LIVE_SESSIONS_LOCK = Lock()
 SCHEDULER_BOTS = {}
+AVATAR_CACHE = AvatarCache()
 
 ALLIANCES = []
 PLAYERS = []
@@ -37,6 +39,16 @@ def valid_state(value):
 
 def public_user(user):
     return {**user, "subscription": None, "features": ALL_FEATURES}
+
+
+def with_local_avatar(player):
+    avatar_path = player.get("avatar_path")
+    if not avatar_path:
+        return player
+    return {
+        **player,
+        "avatar_url": "/avatar?path=" + quote(avatar_path, safe=""),
+    }
 
 
 def bot_from_capture(capture):
@@ -280,7 +292,19 @@ class Handler(BaseHTTPRequestHandler):
         user = self.require_user()
         if not user:
             return
-        if path == "/api/session":
+        if path == "/avatar":
+            avatar_path = query.get("path", [""])[0]
+            image = AVATAR_CACHE.resolve(avatar_path)
+            if not image:
+                self.send_json(404, {"error": "profile picture is not in the local game cache"})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(image)))
+            self.send_header("Cache-Control", "private, max-age=86400")
+            self.end_headers()
+            self.wfile.write(image)
+        elif path == "/api/session":
             self.send_json(200, {"user": public_user(user)})
         elif path in {"/bots", "/gather-bots"}:
             self.send_json(200, {"results": user_bots(user)})
@@ -317,7 +341,8 @@ class Handler(BaseHTTPRequestHandler):
             rows = []
             self.send_json(200, {"cached": False, "storage": "saved", "state": int(state), "complete": True, "results": rows})
         elif path in {"/alliances", "/players", "/profiles"}:
-            self.send_json(200, {"results": ALLIANCES if path == "/alliances" else PLAYERS})
+            rows = ALLIANCES if path == "/alliances" else [with_local_avatar(player) for player in PLAYERS]
+            self.send_json(200, {"results": rows})
         elif path == "/alliance-details":
             alliance = next((row for row in ALLIANCES if str(row["id"]) == query.get("id", [""])[0]), None)
             self.send_json(200 if alliance else 404, {"stored": True, "alliance": alliance} if alliance else {"error": "alliance not found"})
@@ -354,7 +379,10 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/live-alliance-details":
                     self.send_json(200, {"live": True, "stored": False, "protocol": 5138, "alliance": session.fetch_alliance_details(alliance_id, alliance_id // 1_000_000)})
                 else:
-                    members = session.fetch_roster(alliance_id, alliance_id // 1_000_000)
+                    members = [
+                        with_local_avatar(member)
+                        for member in session.fetch_roster(alliance_id, alliance_id // 1_000_000)
+                    ]
                     self.send_json(200, {"live": True, "stored": False, "alliance_id": alliance_id, "members": members, "coordinates_available": any(member.get("x") is not None and member.get("y") is not None for member in members)})
             except (ConnectionError, OSError, RuntimeError, ValueError) as error:
                 self.send_json(502, {"error": str(error)})
