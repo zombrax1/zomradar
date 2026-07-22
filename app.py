@@ -72,7 +72,7 @@ def bot_from_capture(capture):
             gather_ready = True
         except (OSError, ValueError):
             gather_ready = False
-        return {"id": f"{uid}-{alliance_id}", "name": name, "uid": uid, "pid": int(auth["pid"]), "alliance_id": alliance_id, "state": alliance_id // 1_000_000, "remote": endpoint(temporary, 13321), "gather_ready": gather_ready}
+        return {"id": f"{uid}-{alliance_id}", "name": name, "label": name or f"Bot UID {uid}", "uid": uid, "pid": int(auth["pid"]), "alliance_id": alliance_id, "state": alliance_id // 1_000_000, "remote": endpoint(temporary, 13321), "gather_ready": gather_ready}
     finally:
         if temporary:
             temporary.unlink(missing_ok=True)
