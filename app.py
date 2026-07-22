@@ -16,6 +16,7 @@ DATA_DIR = Path(os.getenv("ZOMRADAR_DATA_DIR", ROOT / "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 STORE = SaaSStore(DATA_DIR / "zomradar.db")
 STORE.initialize()
+ALL_FEATURES = ["alliance_search", "state_search", "gather", "auto_shield"]
 
 ALLIANCES = [
     {"id": 1755000001, "state": 1755, "tag": "NTH", "name": "Northwatch", "member_count": 12, "capacity": 100, "leader_name": "Aurora", "exact_power": 32611024561, "announcement": "Demo alliance data", "description": "Synthetic data included for a safe public demo."},
@@ -37,7 +38,7 @@ PLAYERS = [
 
 
 def public_user(user):
-    return user
+    return {**user, "subscription": None, "features": ALL_FEATURES}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -97,17 +98,10 @@ class Handler(BaseHTTPRequestHandler):
                 cookie = SimpleCookie(self.headers.get("Cookie", ""))
                 STORE.logout(cookie["wos_session"].value if "wos_session" in cookie else None)
                 self.send_json(200, {"signed_out": True}, {"Set-Cookie": self.session_cookie("", 0)})
-            elif path == "/api/billing/test-checkout":
-                data = self.read_json()
-                self.send_json(200, {"test_mode": True, "user": STORE.activate(user["id"], data.get("plan"), "demo")})
-            elif path == "/api/admin/activate" and user["role"] == "admin":
-                data = self.read_json()
-                activated = STORE.activate(int(data.get("user_id")), data.get("plan"), "admin", int(data.get("days", 30)))
-                self.send_json(200, {"user": activated})
             elif path in {"/add-bot", "/start-gather", "/recall-gather", "/auto-shield", "/gather-automation"}:
                 self.send_json(503, {"error": "live controls require a private collector; no credentials are stored in this web demo"})
             else:
-                self.send_json(403 if path == "/api/admin/activate" else 404, {"error": "administrator access required" if path == "/api/admin/activate" else "not found"})
+                self.send_json(404, {"error": "not found"})
         except (json.JSONDecodeError, TypeError, ValueError) as error:
             self.send_json(400, {"error": str(error)})
 
@@ -129,19 +123,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/health":
             self.send_json(200, {"ok": True, "mode": "demo", "credentials_stored": False})
             return
-        if path == "/api/plans":
-            self.send_json(200, {"test_mode": True, "currency": "USD", "results": STORE.plans()})
-            return
         user = self.require_user()
         if not user:
             return
         if path == "/api/session":
             self.send_json(200, {"user": public_user(user)})
-        elif path == "/api/admin/users":
-            try:
-                self.send_json(200, {"results": STORE.admin_users(user["id"])})
-            except PermissionError as error:
-                self.send_json(403, {"error": str(error)})
         elif path in {"/bots", "/gather-bots", "/gathers", "/scout-reports", "/live-attacks"}:
             self.send_json(200, {"demo": True, "results": []})
         elif path == "/state-cache":
