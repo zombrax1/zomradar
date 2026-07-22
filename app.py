@@ -89,23 +89,32 @@ def user_bots(user):
     return bots
 
 
-def user_live_session(user):
+def saved_user_bot(user, bot_id=None):
+    for saved in STORE.bot_captures():
+        if saved["user_id"] != user["id"]:
+            continue
+        bot = bot_from_capture(saved["capture"])
+        if bot_id is None or bot["id"] == bot_id:
+            return saved, bot
+    raise ValueError("select a valid uploaded bot")
+
+
+def user_live_session(user, bot_id=None):
     with LIVE_SESSIONS_LOCK:
-        if user["id"] in LIVE_SESSIONS:
-            return LIVE_SESSIONS[user["id"]]
-        saved = next((row for row in STORE.bot_captures() if row["user_id"] == user["id"]), None)
-        if not saved:
-            raise ValueError("upload a PCAP bot in Settings first")
+        saved, bot = saved_user_bot(user, bot_id)
+        key = (user["id"], saved["uid"])
+        if key in LIVE_SESSIONS:
+            return LIVE_SESSIONS[key]
         temporary = None
         try:
             with tempfile.NamedTemporaryFile(suffix=".pcap", delete=False) as output:
                 output.write(saved["capture"])
                 temporary = Path(output.name)
-            session = WosSession(temporary, rid=saved["uid"], bot=str(saved["uid"]))
+            session = WosSession(temporary, rid=saved["uid"], state=bot["state"], bot=bot["id"])
         finally:
             if temporary:
                 temporary.unlink(missing_ok=True)
-        LIVE_SESSIONS[user["id"]] = session
+        LIVE_SESSIONS[key] = session
         return session
 
 
@@ -174,16 +183,35 @@ class Handler(BaseHTTPRequestHandler):
                 bot = bot_from_capture(capture)
                 STORE.save_bot_capture(user["id"], bot["uid"], capture)
                 with LIVE_SESSIONS_LOCK:
-                    old_session = LIVE_SESSIONS.pop(user["id"], None)
+                    old_session = LIVE_SESSIONS.pop((user["id"], bot["uid"]), None)
                     if old_session and old_session.connection:
                         old_session.connection.close()
                 self.send_json(200, {"added": True, "bot": bot, "count": len(user_bots(user))})
-            elif path in {"/start-gather", "/recall-gather", "/auto-shield", "/gather-automation"}:
+            elif path == "/start-gather":
+                data = self.read_json()
+                bot = data.get("bot")
+                session = user_live_session(user, bot)
+                self.send_json(200, {"started": True, "gather": session.start_gather(data.get("resource"), session.state, bot)})
+            elif path == "/recall-gather":
+                data = self.read_json()
+                bot, march_id = data.get("bot"), data.get("march_id")
+                if not isinstance(march_id, int) or march_id <= 0:
+                    raise ValueError("march_id must be a positive number")
+                self.send_json(200, {"recalled": True, "gather": user_live_session(user, bot).recall_gather(march_id)})
+            elif path == "/auto-shield":
+                data = self.read_json()
+                if not isinstance(data.get("enabled"), bool):
+                    raise ValueError("enabled must be true or false")
+                session = user_live_session(user, data.get("bot"))
+                self.send_json(200, session.set_auto_shield(session.rid, data["enabled"]))
+            elif path == "/gather-automation":
                 self.send_json(503, {"error": "live controls require a private collector; no credentials are stored in this web demo"})
             else:
                 self.send_json(404, {"error": "not found"})
         except (json.JSONDecodeError, TypeError, ValueError) as error:
             self.send_json(400, {"error": str(error)})
+        except (ConnectionError, OSError, RuntimeError) as error:
+            self.send_json(502, {"error": str(error)})
 
     def do_GET(self):
         request = urlparse(self.path)
@@ -210,7 +238,28 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, {"user": public_user(user)})
         elif path in {"/bots", "/gather-bots"}:
             self.send_json(200, {"results": user_bots(user)})
-        elif path in {"/gathers", "/scout-reports", "/live-attacks"}:
+        elif path == "/gathers":
+            bot = query.get("bot", [""])[0]
+            try:
+                session = user_live_session(user, bot)
+                self.send_json(200, {"live": True, "bot": bot, "connection": {"game_connected": bool(session.connection), "chat_connected": False}, "results": session.list_gathers(query.get("refresh", ["0"])[0] == "1")})
+            except (ConnectionError, OSError, RuntimeError, ValueError) as error:
+                self.send_json(502, {"error": str(error)})
+        elif path == "/gather-automation":
+            bot = query.get("bot", [""])[0]
+            try:
+                session = user_live_session(user, bot)
+                self.send_json(200, {"schedule": None, "connection": {"game_connected": bool(session.connection), "chat_connected": False}, "runs": [], "cooldown_seconds": 300})
+            except (ConnectionError, OSError, RuntimeError, ValueError) as error:
+                self.send_json(502, {"error": str(error)})
+        elif path == "/auto-shield":
+            bot = query.get("bot", [""])[0]
+            try:
+                session = user_live_session(user, bot)
+                self.send_json(200, {"bot": next(row for row in user_bots(user) if row["id"] == bot), **session.auto_shield_status()})
+            except (ConnectionError, OSError, RuntimeError, StopIteration, ValueError) as error:
+                self.send_json(502, {"error": str(error)})
+        elif path in {"/scout-reports", "/live-attacks"}:
             self.send_json(200, {"demo": True, "results": []})
         elif path == "/state-cache":
             state = query.get("state", [""])[0]
@@ -270,7 +319,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, {"live": True, "stored": False, **user_live_session(user).fetch_details2(int(rid))})
             except (ConnectionError, OSError, RuntimeError, ValueError) as error:
                 self.send_json(502, {"error": str(error)})
-        elif path.startswith("/live-") or path in {"/gather-automation", "/auto-shield"}:
+        elif path.startswith("/live-"):
             self.send_json(503, {"error": "this live action is not connected to the uploaded PCAP yet"})
         else:
             self.send_json(404, {"error": "not found"})

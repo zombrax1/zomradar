@@ -3,17 +3,14 @@ from unittest.mock import patch
 import app
 
 
-class SavedCapture:
-    def bot_captures(self):
-        return [{"user_id": 7, "uid": 42, "capture": b"pcap"}]
-
-
 def test_user_live_session_reuses_private_capture():
     app.LIVE_SESSIONS.clear()
     session = object()
-    with patch.object(app, "STORE", SavedCapture()), patch.object(app, "WosSession", return_value=session) as constructor:
-        assert app.user_live_session({"id": 7}) is session
-        assert app.user_live_session({"id": 7}) is session
+    saved = {"user_id": 7, "uid": 42, "capture": b"pcap"}
+    bot = {"id": "42-1642000001", "state": 1642}
+    with patch.object(app, "saved_user_bot", return_value=(saved, bot)), patch.object(app, "WosSession", return_value=session) as constructor:
+        assert app.user_live_session({"id": 7}, bot["id"]) is session
+        assert app.user_live_session({"id": 7}, bot["id"]) is session
         assert constructor.call_count == 1
 
 
