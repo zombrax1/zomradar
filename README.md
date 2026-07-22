@@ -1,8 +1,8 @@
 # ZomRadar
 
-A complete, token-free web demo for alliance and player exploration. It includes
-the dashboard, account system, package activation flow, synthetic demo data,
-SQLite persistence, and a production-ready Docker entrypoint.
+A private web dashboard for saved and PCAP-backed live alliance/player data. It
+includes accounts, synthetic fallback data, SQLite persistence, and a Docker
+entrypoint.
 
 ## Run locally
 
@@ -10,8 +10,8 @@ SQLite persistence, and a production-ready Docker entrypoint.
 python app.py
 ```
 
-Open <http://localhost:8000>, create the first account, choose a demo package,
-then load saved state `1755`.
+Open <http://localhost:8000>, create an account, upload your own PCAP in
+Settings, then use **Live fetch**.
 
 ## Run with Docker
 
@@ -25,7 +25,7 @@ Set `ZOMRADAR_DATA_DIR` to change the SQLite directory and
 
 ## Live data boundary
 
-This public repository contains no packet captures, session credentials, or
-private account data. Live scanning and game controls require a separate,
-self-owned private collector. The included web app remains fully runnable using
-synthetic demo data.
+This repository contains no packet captures, session credentials, or private
+account data. Uploaded captures stay in the ignored runtime SQLite database and
+are used server-side for live state, alliance, roster, and player-detail reads.
+Protect the data directory: a PCAP can contain an authenticated game session.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Token-free ZomRadar web server with safe demo data."""
+"""Private ZomRadar web server with saved demo data and PCAP-backed live fetch."""
 
 import json
 import os
@@ -7,12 +7,13 @@ import tempfile
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Lock
 from urllib.parse import parse_qs, urlparse
 
 from outputs.wos_saas import SESSION_SECONDS, SaaSStore
 
 os.environ["WOS_DISABLE_DEFAULT_CAPTURES"] = "1"
-from outputs.wos_live_roster import bot_name_from_capture, endpoint, fpnn_alliance_id, fpnn_auth_frame, login_frame, msgpack_value
+from outputs.wos_live_roster import WosSession, bot_name_from_capture, endpoint, fpnn_alliance_id, fpnn_auth_frame, login_frame, msgpack_value
 
 
 ROOT = Path(__file__).parent
@@ -21,6 +22,8 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 STORE = SaaSStore(DATA_DIR / "zomradar.db")
 STORE.initialize()
 ALL_FEATURES = ["alliance_search", "state_search", "gather", "auto_shield"]
+LIVE_SESSIONS = {}
+LIVE_SESSIONS_LOCK = Lock()
 
 ALLIANCES = [
     {"id": 1755000001, "state": 1755, "tag": "NTH", "name": "Northwatch", "member_count": 12, "capacity": 100, "leader_name": "Aurora", "exact_power": 32611024561, "announcement": "Demo alliance data", "description": "Synthetic data included for a safe public demo."},
@@ -84,6 +87,26 @@ def user_bots(user):
             except (KeyError, OSError, TypeError, ValueError, UnicodeDecodeError):
                 pass
     return bots
+
+
+def user_live_session(user):
+    with LIVE_SESSIONS_LOCK:
+        if user["id"] in LIVE_SESSIONS:
+            return LIVE_SESSIONS[user["id"]]
+        saved = next((row for row in STORE.bot_captures() if row["user_id"] == user["id"]), None)
+        if not saved:
+            raise ValueError("upload a PCAP bot in Settings first")
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".pcap", delete=False) as output:
+                output.write(saved["capture"])
+                temporary = Path(output.name)
+            session = WosSession(temporary, rid=saved["uid"], bot=str(saved["uid"]))
+        finally:
+            if temporary:
+                temporary.unlink(missing_ok=True)
+        LIVE_SESSIONS[user["id"]] = session
+        return session
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -150,6 +173,10 @@ class Handler(BaseHTTPRequestHandler):
                 capture = self.rfile.read(length)
                 bot = bot_from_capture(capture)
                 STORE.save_bot_capture(user["id"], bot["uid"], capture)
+                with LIVE_SESSIONS_LOCK:
+                    old_session = LIVE_SESSIONS.pop(user["id"], None)
+                    if old_session and old_session.connection:
+                        old_session.connection.close()
                 self.send_json(200, {"added": True, "bot": bot, "count": len(user_bots(user))})
             elif path in {"/start-gather", "/recall-gather", "/auto-shield", "/gather-automation"}:
                 self.send_json(503, {"error": "live controls require a private collector; no credentials are stored in this web demo"})
@@ -174,7 +201,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if path == "/health":
-            self.send_json(200, {"ok": True, "mode": "demo", "credentials_stored": False})
+            self.send_json(200, {"ok": True, "mode": "private-live", "pcap_upload_enabled": True})
             return
         user = self.require_user()
         if not user:
@@ -209,8 +236,42 @@ class Handler(BaseHTTPRequestHandler):
             rid = int(value)
             player = next((row for row in PLAYERS if row["rid"] == rid), None)
             self.send_json(200, {"stored": True, "rid": rid, "power": {"position": PLAYERS.index(player) + 1, "value": player["power"], "alliance_rank": player["rank"]}, "ko": None, "daily_contribution": None, "restricted_reason": "Demo data"} if player else {"error": "player not found"})
+        elif path == "/live-state":
+            state, start, count = query.get("state", [""])[0], query.get("start", ["0"])[0], query.get("count", ["40"])[0]
+            if not state.isdigit() or not 1492 <= int(state) <= 1894 or not start.isdigit() or not 0 <= int(start) <= 1600 or not count.isdigit() or not 1 <= int(count) <= 100:
+                self.send_json(400, {"error": "state, start, or count is outside the supported range"})
+                return
+            try:
+                batch = user_live_session(user).fetch_alliances(int(state), int(start), int(count))
+                self.send_json(200, {"live": True, "stored": False, "state": int(state), **batch})
+            except (ConnectionError, OSError, RuntimeError, ValueError) as error:
+                self.send_json(502, {"error": str(error)})
+        elif path in {"/live-alliance-details", "/live-roster"}:
+            alliance_id = query.get("id", [""])[0]
+            if not alliance_id.isdigit():
+                self.send_json(400, {"error": "id must contain digits only"})
+                return
+            alliance_id = int(alliance_id)
+            try:
+                session = user_live_session(user)
+                if path == "/live-alliance-details":
+                    self.send_json(200, {"live": True, "stored": False, "protocol": 5138, "alliance": session.fetch_alliance_details(alliance_id, alliance_id // 1_000_000)})
+                else:
+                    members = session.fetch_roster(alliance_id, alliance_id // 1_000_000)
+                    self.send_json(200, {"live": True, "stored": False, "alliance_id": alliance_id, "members": members, "coordinates_available": any(member.get("x") is not None and member.get("y") is not None for member in members)})
+            except (ConnectionError, OSError, RuntimeError, ValueError) as error:
+                self.send_json(502, {"error": str(error)})
+        elif path == "/live-details-2":
+            rid = query.get("rid", [""])[0]
+            if not rid.isdigit():
+                self.send_json(400, {"error": "rid must contain digits only"})
+                return
+            try:
+                self.send_json(200, {"live": True, "stored": False, **user_live_session(user).fetch_details2(int(rid))})
+            except (ConnectionError, OSError, RuntimeError, ValueError) as error:
+                self.send_json(502, {"error": str(error)})
         elif path.startswith("/live-") or path in {"/gather-automation", "/auto-shield"}:
-            self.send_json(503, {"error": "live data requires a private collector; this public deployment is token-free"})
+            self.send_json(503, {"error": "this live action is not connected to the uploaded PCAP yet"})
         else:
             self.send_json(404, {"error": "not found"})
 

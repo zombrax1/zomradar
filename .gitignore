@@ -4,6 +4,7 @@
 !README.md
 !Dockerfile
 !app.py
+!test_app.py
 !outputs/
 outputs/*
 !outputs/*.py
