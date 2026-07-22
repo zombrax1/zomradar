@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import patch
 
 import app
@@ -19,6 +20,13 @@ def test_bot_without_name_has_visible_label():
         assert app.bot_from_capture(b"pcap")["label"] == "Bot UID 42"
 
 
+def test_primary_actions_do_not_open_confirmations():
+    dashboard = Path(__file__).with_name("outputs").joinpath("wos_search_dashboard.html").read_text(encoding="utf-8")
+    assert "if(!confirm(`Server reports" not in dashboard
+    assert "if(enabled&&!confirm(" not in dashboard
+
+
 if __name__ == "__main__":
     test_user_live_session_reuses_private_capture()
     test_bot_without_name_has_visible_label()
+    test_primary_actions_do_not_open_confirmations()
