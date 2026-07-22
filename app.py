@@ -15,7 +15,7 @@ from outputs.wos_gather_scheduler import GatherScheduler
 from outputs.wos_avatar_cache import AvatarCache
 
 os.environ["WOS_DISABLE_DEFAULT_CAPTURES"] = "1"
-from outputs.wos_live_roster import WosSession, bot_name_from_capture, endpoint, fpnn_alliance_id, fpnn_auth_frame, login_frame, msgpack_value
+from outputs.wos_live_roster import WosSession, bot_name_from_capture, cached_map_players, endpoint, fpnn_alliance_id, fpnn_auth_frame, login_frame, msgpack_value
 
 
 ROOT = Path(__file__).parent
@@ -28,10 +28,6 @@ LIVE_SESSIONS = {}
 LIVE_SESSIONS_LOCK = Lock()
 SCHEDULER_BOTS = {}
 AVATAR_CACHE = AvatarCache()
-
-ALLIANCES = []
-PLAYERS = []
-
 
 def valid_state(value):
     return value.isdigit() and 1 <= int(value) <= 9999
@@ -338,26 +334,34 @@ class Handler(BaseHTTPRequestHandler):
             if not valid_state(state):
                 self.send_json(400, {"error": "state must be a number from 1 to 9999"})
                 return
-            rows = []
-            self.send_json(200, {"cached": False, "storage": "saved", "state": int(state), "complete": True, "results": rows})
+            saved = STORE.saved_state(user["id"], int(state))
+            self.send_json(200, {"cached": bool(saved), "storage": "sqlite", "state": int(state), "complete": False, "results": [], **(saved or {})})
         elif path in {"/alliances", "/players", "/profiles"}:
-            rows = ALLIANCES if path == "/alliances" else [with_local_avatar(player) for player in PLAYERS]
+            rows = STORE.saved_alliances(user["id"]) if path == "/alliances" else [with_local_avatar(player) for player in STORE.saved_players(user["id"])]
             self.send_json(200, {"results": rows})
         elif path == "/alliance-details":
-            alliance = next((row for row in ALLIANCES if str(row["id"]) == query.get("id", [""])[0]), None)
+            value = query.get("id", [""])[0]
+            if not value.isdigit():
+                self.send_json(400, {"error": "id must contain digits only"})
+                return
+            alliance = STORE.saved_alliance(user["id"], int(value))
             self.send_json(200 if alliance else 404, {"stored": True, "alliance": alliance} if alliance else {"error": "alliance not found"})
         elif path == "/roster":
-            alliance_id = query.get("id", [""])[0]
-            members = []
-            self.send_json(200, {"stored": True, "alliance_id": int(alliance_id) if alliance_id.isdigit() else None, "members": members, "coordinates_available": bool(members)})
-        elif path == "/details-2":
-            value = query.get("rid", [""])[0]
+            value = query.get("id", [""])[0]
             if not value.isdigit():
-                self.send_json(400, {"error": "rid must contain digits only"})
+                self.send_json(400, {"error": "id must contain digits only"})
                 return
-            rid = int(value)
-            player = next((row for row in PLAYERS if row["rid"] == rid), None)
-            self.send_json(200, {"stored": True, "rid": rid, "power": {"position": PLAYERS.index(player) + 1, "value": player["power"], "alliance_rank": player["rank"]}, "ko": None, "daily_contribution": None, "restricted_reason": "No saved details"} if player else {"error": "player not found"})
+            roster = STORE.saved_roster(user["id"], int(value))
+            if roster:
+                roster["members"] = [with_local_avatar(member) for member in roster["members"]]
+            self.send_json(200 if roster else 404, {"stored": True, **roster} if roster else {"error": "alliance roster is not stored; click Live fetch"})
+        elif path == "/details-2":
+            rid, alliance_id = query.get("rid", [""])[0], query.get("alliance_id", [""])[0]
+            if not rid.isdigit() or not alliance_id.isdigit():
+                self.send_json(400, {"error": "rid and alliance_id must contain digits only"})
+                return
+            result = STORE.saved_details2(user["id"], int(alliance_id), int(rid))
+            self.send_json(200 if result else 404, {"stored": True, **result} if result else {"error": "these player details are not stored; use Live fetch"})
         elif path == "/live-state":
             state, start, count, bot = query.get("state", [""])[0], query.get("start", ["0"])[0], query.get("count", ["40"])[0], query.get("bot", [""])[0]
             if not valid_state(state) or not start.isdigit() or not 0 <= int(start) <= 1600 or not count.isdigit() or not 1 <= int(count) <= 100:
@@ -365,7 +369,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 batch = user_live_session(user, bot).fetch_alliances(int(state), int(start), int(count))
-                self.send_json(200, {"live": True, "stored": False, "state": int(state), **batch})
+                STORE.save_state(user["id"], int(state), batch, cached_map_players(int(state)))
+                self.send_json(200, {"live": True, "stored": True, "storage": "sqlite", "state": int(state), **batch})
             except (ConnectionError, OSError, RuntimeError, ValueError) as error:
                 self.send_json(502, {"error": str(error)})
         elif path in {"/live-alliance-details", "/live-roster"}:
@@ -377,22 +382,25 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 session = user_live_session(user, bot)
                 if path == "/live-alliance-details":
-                    self.send_json(200, {"live": True, "stored": False, "protocol": 5138, "alliance": session.fetch_alliance_details(alliance_id, alliance_id // 1_000_000)})
+                    alliance = session.fetch_alliance_details(alliance_id, alliance_id // 1_000_000)
+                    STORE.save_alliance(user["id"], alliance)
+                    self.send_json(200, {"live": True, "stored": True, "storage": "sqlite", "protocol": 5138, "alliance": alliance})
                 else:
-                    members = [
-                        with_local_avatar(member)
-                        for member in session.fetch_roster(alliance_id, alliance_id // 1_000_000)
-                    ]
-                    self.send_json(200, {"live": True, "stored": False, "alliance_id": alliance_id, "members": members, "coordinates_available": any(member.get("x") is not None and member.get("y") is not None for member in members)})
+                    members = session.fetch_roster(alliance_id, alliance_id // 1_000_000)
+                    members = STORE.save_roster(user["id"], alliance_id, alliance_id // 1_000_000, members)
+                    members = [with_local_avatar(member) for member in members]
+                    self.send_json(200, {"live": True, "stored": True, "storage": "sqlite", "alliance_id": alliance_id, "members": members, "coordinates_available": any(member.get("x") is not None and member.get("y") is not None for member in members)})
             except (ConnectionError, OSError, RuntimeError, ValueError) as error:
                 self.send_json(502, {"error": str(error)})
         elif path == "/live-details-2":
-            rid, bot = query.get("rid", [""])[0], query.get("bot", [""])[0]
-            if not rid.isdigit():
-                self.send_json(400, {"error": "rid must contain digits only"})
+            rid, alliance_id, bot = query.get("rid", [""])[0], query.get("alliance_id", [""])[0], query.get("bot", [""])[0]
+            if not rid.isdigit() or not alliance_id.isdigit():
+                self.send_json(400, {"error": "rid and alliance_id must contain digits only"})
                 return
             try:
-                self.send_json(200, {"live": True, "stored": False, **user_live_session(user, bot).fetch_details2(int(rid))})
+                result = user_live_session(user, bot).fetch_details2(int(rid))
+                STORE.save_details2(user["id"], int(alliance_id), result)
+                self.send_json(200, {"live": True, "stored": True, "storage": "sqlite", **result})
             except (ConnectionError, OSError, RuntimeError, ValueError) as error:
                 self.send_json(502, {"error": str(error)})
         elif path.startswith("/live-"):

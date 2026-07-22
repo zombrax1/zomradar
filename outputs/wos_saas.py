@@ -105,6 +105,16 @@ class SaaSStore:
                     updated_at INTEGER NOT NULL,
                     PRIMARY KEY(user_id, uid)
                 );
+                CREATE TABLE IF NOT EXISTS wos_data (
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL,
+                    state INTEGER NOT NULL DEFAULT 0,
+                    alliance_id INTEGER NOT NULL DEFAULT 0,
+                    entity_id INTEGER NOT NULL DEFAULT 0,
+                    payload TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY(user_id, kind, state, alliance_id, entity_id)
+                );
             """)
             connection.executemany(
                 "INSERT OR IGNORE INTO plans(slug,name,price_cents,features) VALUES(?,?,?,?)",
@@ -330,6 +340,132 @@ class SaaSStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    @staticmethod
+    def _save_wos_row(connection, user_id, kind, payload, state=0, alliance_id=0, entity_id=0):
+        connection.execute(
+            """INSERT INTO wos_data(user_id,kind,state,alliance_id,entity_id,payload,updated_at)
+               VALUES(?,?,?,?,?,?,?)
+               ON CONFLICT(user_id,kind,state,alliance_id,entity_id) DO UPDATE SET
+               payload=excluded.payload,updated_at=excluded.updated_at""",
+            (int(user_id), kind, int(state), int(alliance_id), int(entity_id),
+             json.dumps(payload, ensure_ascii=False, separators=(",", ":")), int(time.time())),
+        )
+
+    def _wos_row(self, user_id, kind, state=0, alliance_id=0, entity_id=0):
+        with self.connect() as connection:
+            row = connection.execute(
+                """SELECT payload,updated_at FROM wos_data
+                   WHERE user_id=? AND kind=? AND state=? AND alliance_id=? AND entity_id=?""",
+                (int(user_id), kind, int(state), int(alliance_id), int(entity_id)),
+            ).fetchone()
+        if not row:
+            return None
+        payload = json.loads(row["payload"])
+        payload["stored_at"] = row["updated_at"]
+        return payload
+
+    def save_state(self, user_id, state, batch, map_players=None):
+        state = int(state)
+        payload = {
+            "state": state,
+            "complete": bool(batch.get("done")),
+            "scanned": int(batch.get("scanned", 0)),
+            "total": int(batch.get("total", 1600)),
+            "results": list(batch.get("results", [])),
+            "map_players": list(map_players or []),
+        }
+        with self.connect() as connection:
+            self._save_wos_row(connection, user_id, "state", payload, state=state)
+            for alliance in payload["results"]:
+                alliance_id = int(alliance["id"])
+                self._save_wos_row(connection, user_id, "alliance", alliance, state, alliance_id, alliance_id)
+        return self.saved_state(user_id, state)
+
+    def saved_state(self, user_id, state):
+        return self._wos_row(user_id, "state", state=int(state))
+
+    def save_alliance(self, user_id, alliance):
+        alliance_id = int(alliance["id"])
+        state = int(alliance.get("state") or alliance_id // 1_000_000)
+        with self.connect() as connection:
+            self._save_wos_row(connection, user_id, "alliance", alliance, state, alliance_id, alliance_id)
+        return self.saved_alliance(user_id, alliance_id)
+
+    def saved_alliance(self, user_id, alliance_id):
+        alliance_id = int(alliance_id)
+        return self._wos_row(user_id, "alliance", alliance_id // 1_000_000, alliance_id, alliance_id)
+
+    def saved_alliances(self, user_id):
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload,updated_at FROM wos_data WHERE user_id=? AND kind='alliance'",
+                (int(user_id),),
+            ).fetchall()
+        results = []
+        for row in rows:
+            alliance = json.loads(row["payload"])
+            alliance["stored_at"] = row["updated_at"]
+            results.append(alliance)
+        return sorted(results, key=lambda alliance: alliance.get("exact_power", 0), reverse=True)
+
+    def save_roster(self, user_id, alliance_id, state, members):
+        alliance_id, state = int(alliance_id), int(state)
+        ids = [int(member["rid"]) for member in members]
+        previous = {}
+        with self.connect() as connection:
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                rows = connection.execute(
+                    f"""SELECT entity_id,payload FROM wos_data WHERE user_id=? AND kind='player'
+                        AND state=? AND alliance_id=? AND entity_id IN ({placeholders})""",
+                    (int(user_id), state, alliance_id, *ids),
+                ).fetchall()
+                previous = {row["entity_id"]: json.loads(row["payload"]).get("power") for row in rows}
+            enriched = []
+            for member in members:
+                player = dict(member)
+                old_power = previous.get(player["rid"])
+                player["power_change"] = None if old_power is None else player.get("power", 0) - old_power
+                enriched.append(player)
+            roster = {
+                "alliance_id": alliance_id,
+                "members": enriched,
+                "coordinates_available": any(member.get("x") is not None and member.get("y") is not None for member in enriched),
+            }
+            self._save_wos_row(connection, user_id, "roster", roster, state, alliance_id, alliance_id)
+            for player in enriched:
+                self._save_wos_row(connection, user_id, "player", player, state, alliance_id, player["rid"])
+        return enriched
+
+    def saved_roster(self, user_id, alliance_id):
+        alliance_id = int(alliance_id)
+        return self._wos_row(user_id, "roster", alliance_id // 1_000_000, alliance_id, alliance_id)
+
+    def saved_players(self, user_id):
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT entity_id,payload,updated_at FROM wos_data WHERE user_id=? AND kind='player' ORDER BY updated_at DESC",
+                (int(user_id),),
+            ).fetchall()
+        players = {}
+        for row in rows:
+            if row["entity_id"] not in players:
+                player = json.loads(row["payload"])
+                player["stored_at"] = row["updated_at"]
+                players[row["entity_id"]] = player
+        return sorted(players.values(), key=lambda player: player.get("power", 0), reverse=True)
+
+    def save_details2(self, user_id, alliance_id, result):
+        alliance_id = int(alliance_id)
+        with self.connect() as connection:
+            self._save_wos_row(
+                connection, user_id, "details2", result, alliance_id // 1_000_000, alliance_id, result["rid"]
+            )
+
+    def saved_details2(self, user_id, alliance_id, rid):
+        alliance_id = int(alliance_id)
+        return self._wos_row(user_id, "details2", alliance_id // 1_000_000, alliance_id, int(rid))
+
     def save_bot_capture(self, user_id, uid, capture):
         if not isinstance(capture, bytes) or not 0 < len(capture) <= 128 * 1024 * 1024:
             raise ValueError("bot capture must be a PCAP up to 128 MB")
@@ -363,6 +499,14 @@ def self_test():
         assert schedule["resources"] == ["meat", "wood"] and schedule["march_limit"] == 3 and schedule["infinite"] == 1 and schedule["total_cycles"] == 1
         store.log_gather_run(schedule["id"], 1, {"resource": "meat", "march_id": 7, "started_at": 10, "status": "marching"})
         assert store.gather_runs(schedule["id"])[0]["march_id"] == 7
+        alliance = {"id": 1642000531, "state": 1642, "tag": "WTH", "exact_power": 10}
+        store.save_state(member["id"], 1642, {"results": [alliance], "scanned": 40, "total": 1600, "done": False})
+        assert store.saved_state(member["id"], 1642)["results"] == [alliance]
+        players = store.save_roster(member["id"], alliance["id"], alliance["state"], [{"rid": 7, "power": 10}])
+        assert players[0]["power_change"] is None and store.saved_roster(member["id"], alliance["id"])["members"] == players
+        assert store.save_roster(member["id"], alliance["id"], alliance["state"], [{"rid": 7, "power": 15}])[0]["power_change"] == 5
+        store.save_details2(member["id"], alliance["id"], {"rid": 7, "power": {"value": 15}})
+        assert store.saved_details2(member["id"], alliance["id"], 7)["power"]["value"] == 15
         store.save_bot_capture(member["id"], 7, b"pcap")
         assert store.bot_captures()[0]["capture"] == b"pcap"
         assert store.pause_gather_schedule(member["id"], "bot-1")["status"] == "paused"
