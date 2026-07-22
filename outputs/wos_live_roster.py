@@ -814,7 +814,7 @@ class WosSession:
                 self.buffer = b""
             return True
 
-    def start_gather(self, resource, state=1755, bot=None):
+    def start_gather(self, resource, state=None, bot=None):
         if not valid_bot_state(state) or resource not in GATHER_RESOURCES:
             raise ValueError("select a valid bot and meat, wood, iron, or coal")
         with self.lock:

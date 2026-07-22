@@ -20,10 +20,25 @@ def test_bot_without_name_has_visible_label():
         assert app.bot_from_capture(b"pcap")["label"] == "Bot UID 42"
 
 
+def test_bot_ids_are_scoped_to_the_signed_in_user():
+    with patch.object(app, "bot_from_capture", return_value={"id": "42-1642000001"}):
+        assert app.owned_bot_from_capture({"id": 7}, b"pcap")["id"] == "7:42-1642000001"
+        assert app.owned_bot_from_capture({"id": 8}, b"pcap")["id"] == "8:42-1642000001"
+
+
 def test_primary_actions_do_not_open_confirmations():
     dashboard = Path(__file__).with_name("outputs").joinpath("wos_search_dashboard.html").read_text(encoding="utf-8")
     assert "if(!confirm(`Server reports" not in dashboard
     assert "if(enabled&&!confirm(" not in dashboard
+
+
+def test_roster_and_details_render_player_profile_pictures():
+    dashboard = Path(__file__).with_name("outputs").joinpath("wos_search_dashboard.html").read_text(encoding="utf-8")
+    assert "function playerAvatar(player,large=false)" in dashboard
+    assert "player.avatar_url" in dashboard
+    assert "profile picture" in dashboard
+    assert "playerAvatar(p)" in dashboard
+    assert "playerAvatar(player,true)" in dashboard
 
 
 def test_no_sample_mode_remains():
@@ -35,5 +50,7 @@ def test_no_sample_mode_remains():
 if __name__ == "__main__":
     test_user_live_session_reuses_private_capture()
     test_bot_without_name_has_visible_label()
+    test_bot_ids_are_scoped_to_the_signed_in_user()
     test_primary_actions_do_not_open_confirmations()
+    test_roster_and_details_render_player_profile_pictures()
     test_no_sample_mode_remains()

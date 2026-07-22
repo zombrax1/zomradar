@@ -31,6 +31,10 @@ ALLIANCES = []
 PLAYERS = []
 
 
+def valid_state(value):
+    return value.isdigit() and 1 <= int(value) <= 9999
+
+
 def public_user(user):
     return {**user, "subscription": None, "features": ALL_FEATURES}
 
@@ -65,12 +69,18 @@ def bot_from_capture(capture):
             temporary.unlink(missing_ok=True)
 
 
+def owned_bot_from_capture(user, capture):
+    bot = {**bot_from_capture(capture)}
+    bot["id"] = f"{user['id']}:{bot['id']}"
+    return bot
+
+
 def user_bots(user):
     bots = []
     for saved in STORE.bot_captures():
         if saved["user_id"] == user["id"]:
             try:
-                bot = bot_from_capture(saved["capture"])
+                bot = owned_bot_from_capture(user, saved["capture"])
                 SCHEDULER_BOTS[bot["id"]] = {**bot, "owner_id": user["id"]}
                 bots.append(bot)
             except (KeyError, OSError, TypeError, ValueError, UnicodeDecodeError):
@@ -82,7 +92,7 @@ def saved_user_bot(user, bot_id=None):
     for saved in STORE.bot_captures():
         if saved["user_id"] != user["id"]:
             continue
-        bot = bot_from_capture(saved["capture"])
+        bot = owned_bot_from_capture(user, saved["capture"])
         if bot_id is None or bot["id"] == bot_id:
             return saved, bot
     raise ValueError("select a valid uploaded bot")
@@ -197,7 +207,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.headers.get_content_type() != "application/octet-stream" or not 0 < length <= 128 * 1024 * 1024:
                     raise ValueError("select a classic PCAP file up to 128 MB")
                 capture = self.rfile.read(length)
-                bot = bot_from_capture(capture)
+                bot = owned_bot_from_capture(user, capture)
                 STORE.save_bot_capture(user["id"], bot["uid"], capture)
                 with LIVE_SESSIONS_LOCK:
                     old_session = LIVE_SESSIONS.pop((user["id"], bot["uid"]), None)
@@ -301,8 +311,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, {"results": []})
         elif path == "/state-cache":
             state = query.get("state", [""])[0]
-            if not state.isdigit() or not 1492 <= int(state) <= 1894:
-                self.send_json(400, {"error": "state must be a number from 1492 to 1894"})
+            if not valid_state(state):
+                self.send_json(400, {"error": "state must be a number from 1 to 9999"})
                 return
             rows = []
             self.send_json(200, {"cached": False, "storage": "saved", "state": int(state), "complete": True, "results": rows})
@@ -324,23 +334,23 @@ class Handler(BaseHTTPRequestHandler):
             player = next((row for row in PLAYERS if row["rid"] == rid), None)
             self.send_json(200, {"stored": True, "rid": rid, "power": {"position": PLAYERS.index(player) + 1, "value": player["power"], "alliance_rank": player["rank"]}, "ko": None, "daily_contribution": None, "restricted_reason": "No saved details"} if player else {"error": "player not found"})
         elif path == "/live-state":
-            state, start, count = query.get("state", [""])[0], query.get("start", ["0"])[0], query.get("count", ["40"])[0]
-            if not state.isdigit() or not 1492 <= int(state) <= 1894 or not start.isdigit() or not 0 <= int(start) <= 1600 or not count.isdigit() or not 1 <= int(count) <= 100:
+            state, start, count, bot = query.get("state", [""])[0], query.get("start", ["0"])[0], query.get("count", ["40"])[0], query.get("bot", [""])[0]
+            if not valid_state(state) or not start.isdigit() or not 0 <= int(start) <= 1600 or not count.isdigit() or not 1 <= int(count) <= 100:
                 self.send_json(400, {"error": "state, start, or count is outside the supported range"})
                 return
             try:
-                batch = user_live_session(user).fetch_alliances(int(state), int(start), int(count))
+                batch = user_live_session(user, bot).fetch_alliances(int(state), int(start), int(count))
                 self.send_json(200, {"live": True, "stored": False, "state": int(state), **batch})
             except (ConnectionError, OSError, RuntimeError, ValueError) as error:
                 self.send_json(502, {"error": str(error)})
         elif path in {"/live-alliance-details", "/live-roster"}:
-            alliance_id = query.get("id", [""])[0]
+            alliance_id, bot = query.get("id", [""])[0], query.get("bot", [""])[0]
             if not alliance_id.isdigit():
                 self.send_json(400, {"error": "id must contain digits only"})
                 return
             alliance_id = int(alliance_id)
             try:
-                session = user_live_session(user)
+                session = user_live_session(user, bot)
                 if path == "/live-alliance-details":
                     self.send_json(200, {"live": True, "stored": False, "protocol": 5138, "alliance": session.fetch_alliance_details(alliance_id, alliance_id // 1_000_000)})
                 else:
@@ -349,12 +359,12 @@ class Handler(BaseHTTPRequestHandler):
             except (ConnectionError, OSError, RuntimeError, ValueError) as error:
                 self.send_json(502, {"error": str(error)})
         elif path == "/live-details-2":
-            rid = query.get("rid", [""])[0]
+            rid, bot = query.get("rid", [""])[0], query.get("bot", [""])[0]
             if not rid.isdigit():
                 self.send_json(400, {"error": "rid must contain digits only"})
                 return
             try:
-                self.send_json(200, {"live": True, "stored": False, **user_live_session(user).fetch_details2(int(rid))})
+                self.send_json(200, {"live": True, "stored": False, **user_live_session(user, bot).fetch_details2(int(rid))})
             except (ConnectionError, OSError, RuntimeError, ValueError) as error:
                 self.send_json(502, {"error": str(error)})
         elif path.startswith("/live-"):
@@ -368,7 +378,7 @@ if __name__ == "__main__":
     print(f"ZomRadar: http://127.0.0.1:{port}")
     for saved in STORE.bot_captures():
         try:
-            bot = bot_from_capture(saved["capture"])
+            bot = owned_bot_from_capture({"id": saved["user_id"]}, saved["capture"])
             SCHEDULER_BOTS[bot["id"]] = {**bot, "owner_id": saved["user_id"]}
         except (KeyError, OSError, TypeError, ValueError, UnicodeDecodeError):
             pass
