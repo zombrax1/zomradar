@@ -71,6 +71,8 @@ def test_alliance_search_chooses_a_game_bot_automatically():
     assert "stateBot" not in dashboard
     assert "function automaticGameBot(state)" in dashboard
     assert "bot.state===Number(state)" in dashboard
+    assert "start+=10" in dashboard
+    assert "count=10" in dashboard
 
 
 def test_no_sample_mode_remains():
