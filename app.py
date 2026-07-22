@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Private ZomRadar web server with saved demo data and PCAP-backed live fetch."""
+"""Private ZomRadar web server with PCAP-backed live fetch."""
 
 import json
 import os
@@ -7,10 +7,11 @@ import tempfile
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 from urllib.parse import parse_qs, urlparse
 
 from outputs.wos_saas import SESSION_SECONDS, SaaSStore
+from outputs.wos_gather_scheduler import GatherScheduler
 
 os.environ["WOS_DISABLE_DEFAULT_CAPTURES"] = "1"
 from outputs.wos_live_roster import WosSession, bot_name_from_capture, endpoint, fpnn_alliance_id, fpnn_auth_frame, login_frame, msgpack_value
@@ -24,24 +25,10 @@ STORE.initialize()
 ALL_FEATURES = ["alliance_search", "state_search", "gather", "auto_shield"]
 LIVE_SESSIONS = {}
 LIVE_SESSIONS_LOCK = Lock()
+SCHEDULER_BOTS = {}
 
-ALLIANCES = [
-    {"id": 1755000001, "state": 1755, "tag": "NTH", "name": "Northwatch", "member_count": 12, "capacity": 100, "leader_name": "Aurora", "exact_power": 32611024561, "announcement": "Demo alliance data", "description": "Synthetic data included for a safe public demo."},
-    {"id": 1755000002, "state": 1755, "tag": "SOL", "name": "Solaris", "member_count": 8, "capacity": 100, "leader_name": "Nova", "exact_power": 24890211804, "announcement": "Welcome to Solaris", "description": "Demo alliance for UI testing."},
-    {"id": 1755000003, "state": 1755, "tag": "FRS", "name": "Frostline", "member_count": 6, "capacity": 80, "leader_name": "Glacier", "exact_power": 11987654320, "announcement": "Stay warm", "description": "No live game data is used."},
-]
-
-NAMES = ("Aurora", "Beacon", "Cinder", "Drift", "Ember", "Flint", "Gale", "Harbor", "Ion", "Jade", "Kite", "Lumen")
-PLAYERS = [
-    {"rid": 90000000 + index, "player_id": 700000000 + index, "name": name, "state": 1755,
-     "alliance_id": ALLIANCES[0]["id"], "alliance_tag": "NTH", "alliance_name": "Northwatch",
-     "rank": 5 if index == 1 else 4 if index < 4 else 3, "power": 720000000 - index * 27000000,
-     "power_change": index * 125000, "online": index % 3 == 0, "vip": 10 - index % 7,
-     "x": 500 + index * 3, "y": 620 - index * 2, "coordinate_state": 1755,
-     "level": 30 - index % 4, "language": "English", "shielded": index % 4 == 0,
-     "chat_messages": []}
-    for index, name in enumerate(NAMES, 1)
-]
+ALLIANCES = []
+PLAYERS = []
 
 
 def public_user(user):
@@ -83,7 +70,9 @@ def user_bots(user):
     for saved in STORE.bot_captures():
         if saved["user_id"] == user["id"]:
             try:
-                bots.append(bot_from_capture(saved["capture"]))
+                bot = bot_from_capture(saved["capture"])
+                SCHEDULER_BOTS[bot["id"]] = {**bot, "owner_id": user["id"]}
+                bots.append(bot)
             except (KeyError, OSError, TypeError, ValueError, UnicodeDecodeError):
                 pass
     return bots
@@ -116,6 +105,34 @@ def user_live_session(user, bot_id=None):
                 temporary.unlink(missing_ok=True)
         LIVE_SESSIONS[key] = session
         return session
+
+
+def scheduler_session(bot_id):
+    bot = SCHEDULER_BOTS.get(bot_id)
+    if not bot:
+        raise ValueError("select a valid uploaded bot")
+    return user_live_session({"id": bot["owner_id"]}, bot_id)
+
+
+def scheduler_disconnect(bot_id):
+    bot = SCHEDULER_BOTS.get(bot_id)
+    session = LIVE_SESSIONS.get((bot["owner_id"], bot["uid"])) if bot else None
+    if session:
+        session.disconnect_gather()
+
+
+def scheduler_start(bot_id, resource):
+    session = scheduler_session(bot_id)
+    return session.start_gather(resource, session.state, bot_id)
+
+
+GATHER_SCHEDULER = GatherScheduler(
+    STORE,
+    SCHEDULER_BOTS,
+    lambda bot_id, refresh: scheduler_session(bot_id).list_gathers(refresh),
+    scheduler_start,
+    scheduler_disconnect,
+)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -205,7 +222,26 @@ class Handler(BaseHTTPRequestHandler):
                 session = user_live_session(user, data.get("bot"))
                 self.send_json(200, session.set_auto_shield(session.rid, data["enabled"]))
             elif path == "/gather-automation":
-                self.send_json(503, {"error": "live controls require a private collector; no credentials are stored in this web demo"})
+                data = self.read_json()
+                bot_id = data.get("bot")
+                _, bot = saved_user_bot(user, bot_id)
+                if not bot["gather_ready"]:
+                    raise ValueError("this bot needs a PCAP containing its game login")
+                action = data.get("action")
+                if action == "pause":
+                    schedule = STORE.pause_gather_schedule(user["id"], bot_id)
+                elif action == "start":
+                    existing = STORE.gather_schedule(user["id"], bot_id)
+                    if existing and existing["status"] == "active":
+                        raise ValueError("pause the active gather schedule before starting a new one")
+                    schedule = STORE.save_gather_schedule(
+                        user["id"], bot_id, data.get("resources"), data.get("march_limit"),
+                        data.get("total_cycles"), data.get("connection_mode"), data.get("infinite", False),
+                    )
+                    Thread(target=GATHER_SCHEDULER.tick, name="gather-start", daemon=True).start()
+                else:
+                    raise ValueError("action must be start or pause")
+                self.send_json(200, {"schedule": schedule, "runs": STORE.gather_runs(schedule["id"]), "cooldown_seconds": 300})
             else:
                 self.send_json(404, {"error": "not found"})
         except (json.JSONDecodeError, TypeError, ValueError) as error:
@@ -249,7 +285,9 @@ class Handler(BaseHTTPRequestHandler):
             bot = query.get("bot", [""])[0]
             try:
                 session = user_live_session(user, bot)
-                self.send_json(200, {"schedule": None, "connection": {"game_connected": bool(session.connection), "chat_connected": False}, "runs": [], "cooldown_seconds": 300})
+                schedule = STORE.gather_schedule(user["id"], bot)
+                runs = STORE.gather_runs(schedule["id"]) if schedule else []
+                self.send_json(200, {"schedule": schedule, "connection": {"game_connected": bool(session.connection), "chat_connected": False}, "runs": runs, "cooldown_seconds": 300})
             except (ConnectionError, OSError, RuntimeError, ValueError) as error:
                 self.send_json(502, {"error": str(error)})
         elif path == "/auto-shield":
@@ -260,22 +298,22 @@ class Handler(BaseHTTPRequestHandler):
             except (ConnectionError, OSError, RuntimeError, StopIteration, ValueError) as error:
                 self.send_json(502, {"error": str(error)})
         elif path in {"/scout-reports", "/live-attacks"}:
-            self.send_json(200, {"demo": True, "results": []})
+            self.send_json(200, {"results": []})
         elif path == "/state-cache":
             state = query.get("state", [""])[0]
             if not state.isdigit() or not 1492 <= int(state) <= 1894:
                 self.send_json(400, {"error": "state must be a number from 1492 to 1894"})
                 return
-            rows = ALLIANCES if state == "1755" else []
-            self.send_json(200, {"cached": bool(rows), "storage": "demo", "state": int(state), "complete": True, "results": rows})
+            rows = []
+            self.send_json(200, {"cached": False, "storage": "saved", "state": int(state), "complete": True, "results": rows})
         elif path in {"/alliances", "/players", "/profiles"}:
-            self.send_json(200, {"demo": True, "results": ALLIANCES if path == "/alliances" else PLAYERS})
+            self.send_json(200, {"results": ALLIANCES if path == "/alliances" else PLAYERS})
         elif path == "/alliance-details":
             alliance = next((row for row in ALLIANCES if str(row["id"]) == query.get("id", [""])[0]), None)
             self.send_json(200 if alliance else 404, {"stored": True, "alliance": alliance} if alliance else {"error": "alliance not found"})
         elif path == "/roster":
             alliance_id = query.get("id", [""])[0]
-            members = PLAYERS if alliance_id == str(ALLIANCES[0]["id"]) else []
+            members = []
             self.send_json(200, {"stored": True, "alliance_id": int(alliance_id) if alliance_id.isdigit() else None, "members": members, "coordinates_available": bool(members)})
         elif path == "/details-2":
             value = query.get("rid", [""])[0]
@@ -284,7 +322,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             rid = int(value)
             player = next((row for row in PLAYERS if row["rid"] == rid), None)
-            self.send_json(200, {"stored": True, "rid": rid, "power": {"position": PLAYERS.index(player) + 1, "value": player["power"], "alliance_rank": player["rank"]}, "ko": None, "daily_contribution": None, "restricted_reason": "Demo data"} if player else {"error": "player not found"})
+            self.send_json(200, {"stored": True, "rid": rid, "power": {"position": PLAYERS.index(player) + 1, "value": player["power"], "alliance_rank": player["rank"]}, "ko": None, "daily_contribution": None, "restricted_reason": "No saved details"} if player else {"error": "player not found"})
         elif path == "/live-state":
             state, start, count = query.get("state", [""])[0], query.get("start", ["0"])[0], query.get("count", ["40"])[0]
             if not state.isdigit() or not 1492 <= int(state) <= 1894 or not start.isdigit() or not 0 <= int(start) <= 1600 or not count.isdigit() or not 1 <= int(count) <= 100:
@@ -328,4 +366,11 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
     print(f"ZomRadar: http://127.0.0.1:{port}")
+    for saved in STORE.bot_captures():
+        try:
+            bot = bot_from_capture(saved["capture"])
+            SCHEDULER_BOTS[bot["id"]] = {**bot, "owner_id": saved["user_id"]}
+        except (KeyError, OSError, TypeError, ValueError, UnicodeDecodeError):
+            pass
+    GATHER_SCHEDULER.start()
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()

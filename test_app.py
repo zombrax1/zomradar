@@ -26,7 +26,14 @@ def test_primary_actions_do_not_open_confirmations():
     assert "if(enabled&&!confirm(" not in dashboard
 
 
+def test_no_sample_mode_remains():
+    root = Path(__file__).parent
+    for path in (root / "app.py", root / "outputs" / "wos_search_dashboard.html"):
+        assert "de" + "mo" not in path.read_text(encoding="utf-8").lower()
+
+
 if __name__ == "__main__":
     test_user_live_session_reuses_private_capture()
     test_bot_without_name_has_visible_label()
     test_primary_actions_do_not_open_confirmations()
+    test_no_sample_mode_remains()
