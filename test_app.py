@@ -41,6 +41,13 @@ def test_roster_and_details_render_player_profile_pictures():
     assert "playerAvatar(player,true)" in dashboard
 
 
+def test_alliance_search_chooses_a_game_bot_automatically():
+    dashboard = Path(__file__).with_name("outputs").joinpath("wos_search_dashboard.html").read_text(encoding="utf-8")
+    assert "stateBot" not in dashboard
+    assert "function automaticGameBot(state)" in dashboard
+    assert "bot.state===Number(state)" in dashboard
+
+
 def test_no_sample_mode_remains():
     root = Path(__file__).parent
     for path in (root / "app.py", root / "outputs" / "wos_search_dashboard.html"):
@@ -53,4 +60,5 @@ if __name__ == "__main__":
     test_bot_ids_are_scoped_to_the_signed_in_user()
     test_primary_actions_do_not_open_confirmations()
     test_roster_and_details_render_player_profile_pictures()
+    test_alliance_search_chooses_a_game_bot_automatically()
     test_no_sample_mode_remains()
