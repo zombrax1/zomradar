@@ -1,4 +1,5 @@
 import json
+import os
 import socket
 import struct
 import sys
@@ -1385,12 +1386,13 @@ class FpnnSession:
         }
 
 
-SESSION = WosSession()
-SESSION_1755 = WosSession(GAME_HANDSHAKE_1755)
+USE_DEFAULT_CAPTURES = os.getenv("WOS_DISABLE_DEFAULT_CAPTURES") != "1"
+SESSION = WosSession() if USE_DEFAULT_CAPTURES and GAME_HANDSHAKE.exists() else None
+SESSION_1755 = WosSession(GAME_HANDSHAKE_1755) if USE_DEFAULT_CAPTURES and GAME_HANDSHAKE_1755.exists() else None
 CHAT = FpnnSession()
 CHAT_BOTS = {"default": CHAT}
-CAPTURED_ATTACKS = attacks_from_capture(ATTACK_CAPTURE) + battle_reports_from_capture(REPORT_CAPTURE)
-CAPTURED_SCOUTS = scout_reports_from_capture(SCOUT_CAPTURE)
+CAPTURED_ATTACKS = (attacks_from_capture(ATTACK_CAPTURE) if USE_DEFAULT_CAPTURES and ATTACK_CAPTURE.exists() else []) + (battle_reports_from_capture(REPORT_CAPTURE) if USE_DEFAULT_CAPTURES and REPORT_CAPTURE.exists() else [])
+CAPTURED_SCOUTS = scout_reports_from_capture(SCOUT_CAPTURE) if USE_DEFAULT_CAPTURES and SCOUT_CAPTURE.exists() else []
 
 
 def fetch_roster(alliance_id, state):
@@ -1417,7 +1419,7 @@ def fetch_scout_reports():
     return CAPTURED_SCOUTS
 
 
-GATHER_SESSIONS = {"default": (SESSION, 1642)}
+GATHER_SESSIONS = {"default": (SESSION, 1642)} if SESSION else {}
 
 
 def register_gather_session(bot, capture, state, rid=None):

@@ -9,3 +9,7 @@ outputs/*
 !outputs/*.py
 !outputs/*.html
 !outputs/requirements.txt
+!work/
+work/*
+!work/analyze_wos_pcap.py
+!work/extract_wos_observed.py

@@ -3,12 +3,16 @@
 
 import json
 import os
+import tempfile
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from outputs.wos_saas import SESSION_SECONDS, SaaSStore
+
+os.environ["WOS_DISABLE_DEFAULT_CAPTURES"] = "1"
+from outputs.wos_live_roster import bot_name_from_capture, endpoint, fpnn_alliance_id, fpnn_auth_frame, login_frame, msgpack_value
 
 
 ROOT = Path(__file__).parent
@@ -39,6 +43,47 @@ PLAYERS = [
 
 def public_user(user):
     return {**user, "subscription": None, "features": ALL_FEATURES}
+
+
+def bot_from_capture(capture):
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pcap", delete=False) as output:
+            output.write(capture)
+            temporary = Path(output.name)
+        frame = fpnn_auth_frame(temporary)
+        auth = msgpack_value(frame[16 + frame[7] :])
+        token = auth.get("token")
+        if isinstance(token, bytes):
+            token = token.decode("utf-8")
+        if not isinstance(token, str) or len(token) < 20:
+            raise ValueError("capture has no valid bot session")
+        alliance_id = fpnn_alliance_id(temporary)
+        uid = int(auth["uid"])
+        try:
+            name = bot_name_from_capture(temporary, uid)
+        except (KeyError, OSError, TypeError, ValueError):
+            name = None
+        try:
+            login_frame(temporary)
+            gather_ready = True
+        except (OSError, ValueError):
+            gather_ready = False
+        return {"id": f"{uid}-{alliance_id}", "name": name, "uid": uid, "pid": int(auth["pid"]), "alliance_id": alliance_id, "state": alliance_id // 1_000_000, "remote": endpoint(temporary, 13321), "gather_ready": gather_ready}
+    finally:
+        if temporary:
+            temporary.unlink(missing_ok=True)
+
+
+def user_bots(user):
+    bots = []
+    for saved in STORE.bot_captures():
+        if saved["user_id"] == user["id"]:
+            try:
+                bots.append(bot_from_capture(saved["capture"]))
+            except (KeyError, OSError, TypeError, ValueError, UnicodeDecodeError):
+                pass
+    return bots
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -98,7 +143,15 @@ class Handler(BaseHTTPRequestHandler):
                 cookie = SimpleCookie(self.headers.get("Cookie", ""))
                 STORE.logout(cookie["wos_session"].value if "wos_session" in cookie else None)
                 self.send_json(200, {"signed_out": True}, {"Set-Cookie": self.session_cookie("", 0)})
-            elif path in {"/add-bot", "/start-gather", "/recall-gather", "/auto-shield", "/gather-automation"}:
+            elif path == "/add-bot":
+                length = int(self.headers.get("Content-Length", "0"))
+                if self.headers.get_content_type() != "application/octet-stream" or not 0 < length <= 128 * 1024 * 1024:
+                    raise ValueError("select a classic PCAP file up to 128 MB")
+                capture = self.rfile.read(length)
+                bot = bot_from_capture(capture)
+                STORE.save_bot_capture(user["id"], bot["uid"], capture)
+                self.send_json(200, {"added": True, "bot": bot, "count": len(user_bots(user))})
+            elif path in {"/start-gather", "/recall-gather", "/auto-shield", "/gather-automation"}:
                 self.send_json(503, {"error": "live controls require a private collector; no credentials are stored in this web demo"})
             else:
                 self.send_json(404, {"error": "not found"})
@@ -128,7 +181,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/session":
             self.send_json(200, {"user": public_user(user)})
-        elif path in {"/bots", "/gather-bots", "/gathers", "/scout-reports", "/live-attacks"}:
+        elif path in {"/bots", "/gather-bots"}:
+            self.send_json(200, {"results": user_bots(user)})
+        elif path in {"/gathers", "/scout-reports", "/live-attacks"}:
             self.send_json(200, {"demo": True, "results": []})
         elif path == "/state-cache":
             state = query.get("state", [""])[0]
